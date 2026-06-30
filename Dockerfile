@@ -1,12 +1,15 @@
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:alpine AS runtime
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+FROM node:24-alpine AS runtime
+WORKDIR /app
+COPY --from=build /app/dist ./dist
+COPY server ./server
+ENV DB_PATH=/data/views.db
+ENV PORT=80
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "server/index.js"]

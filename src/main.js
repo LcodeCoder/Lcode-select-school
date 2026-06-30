@@ -5,7 +5,7 @@ import { renderHeader, bindHeader } from './views/header.js';
 import { loadSchools, getSchoolById, getFacets } from './lib/data.js';
 import { initView as initList } from './views/list-view.js';
 import { renderDetailView, bindDetailView, renderCompareView, bindCompareView } from './views/detail-view.js';
-import { getComments, addComment, updateComment, deleteComment, getSchoolOverride, saveSchoolOverride, deleteSchoolOverride, isAdmin, setAdmin, applyTheme, incrementView } from './lib/store.js';
+import { getComments, addComment, updateComment, deleteComment, getSchoolOverride, saveSchoolOverride, deleteSchoolOverride, isAdmin, setAdmin, applyTheme, getAllViews, incrementView } from './lib/store.js';
 import { navigate, subscribe, getRoute } from './lib/router.js';
 import { toast } from './lib/ui.js';
 
@@ -59,6 +59,7 @@ async function renderRoute(route) {
     renderLoading();
     try {
       const data = await loadSchools();
+      await getAllViews();
       await initList(data.schools, data.facets);
     } catch (err) {
       renderError(err.message || '未知错误');
@@ -69,6 +70,7 @@ async function renderRoute(route) {
     renderLoading();
     try {
       await loadSchools();
+      await getAllViews();
       const school = getSchoolById(route.params.id);
       if (!school) {
         host.innerHTML = `
@@ -82,9 +84,11 @@ async function renderRoute(route) {
         `;
         return;
       }
-      incrementView(school.id);
+      const newCount = incrementView(school.id);
       host.innerHTML = renderDetailView(school);
       bindDetailView(school);
+      const viewsSpan = host.querySelector('.detail-views span');
+      if (viewsSpan) viewsSpan.textContent = newCount;
       window.scrollTo({ top: 0, behavior: 'instant' });
     } catch (err) {
       renderError(err.message || '未知错误');

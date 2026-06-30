@@ -105,25 +105,53 @@ export function countComments(schoolId) {
 }
 
 // ===== School views (hot ranking) =====
-export function getAllViews() {
-  return readJSON(VIEW_KEY, {});
+// Server-backed via /api/views. localStorage is a fallback for offline/degraded mode.
+let viewsCache = null;
+
+export async function getAllViews() {
+  if (viewsCache) return viewsCache;
+  try {
+    const r = await fetch('/api/views');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const cache = {};
+    for (const [k, v] of Object.entries(data)) cache[Number(k)] = Number(v);
+    viewsCache = cache;
+    return cache;
+  } catch {
+    viewsCache = readJSON(VIEW_KEY, {});
+    return viewsCache;
+  }
 }
 
 export function getViewCount(id) {
-  const all = getAllViews();
-  return all[id] || 0;
+  if (viewsCache == null) {
+    viewsCache = readJSON(VIEW_KEY, {});
+  }
+  return viewsCache[id] || 0;
 }
 
 export function incrementView(id) {
-  const all = getAllViews();
-  all[id] = (all[id] || 0) + 1;
-  writeJSON(VIEW_KEY, all);
-  return all[id];
+  if (viewsCache == null) viewsCache = readJSON(VIEW_KEY, {});
+  viewsCache[id] = (viewsCache[id] || 0) + 1;
+  writeJSON(VIEW_KEY, viewsCache);
+
+  fetch(`/api/views/${id}`, { method: 'POST' })
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (data && typeof data.count === 'number') {
+        viewsCache[id] = data.count;
+        writeJSON(VIEW_KEY, viewsCache);
+      }
+    })
+    .catch(() => {/* fallback already updated locally */});
+
+  return viewsCache[id];
 }
 
 export function topViewedSchools(limit = 5) {
-  const all = getAllViews();
-  return Object.entries(all)
+  if (viewsCache == null) viewsCache = readJSON(VIEW_KEY, {});
+  return Object.entries(viewsCache)
     .map(([id, count]) => ({ id: Number(id), count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, limit);

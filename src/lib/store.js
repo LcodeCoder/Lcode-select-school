@@ -7,6 +7,7 @@ const SCHOOL_KEY = 'dorm:school-overrides';
 const COMMENT_KEY = 'dorm:comments';
 const ADMIN_KEY = 'dorm:admin';
 const THEME_KEY = 'dorm:theme';
+const VIEW_KEY = 'dorm:views';
 const ADMIN_PASSWORD = 'lyh20041113lyh';
 
 function readJSON(key, fallback) {
@@ -101,6 +102,31 @@ export function deleteComment(schoolId, commentId) {
 
 export function countComments(schoolId) {
   return getComments(schoolId).length;
+}
+
+// ===== School views (hot ranking) =====
+export function getAllViews() {
+  return readJSON(VIEW_KEY, {});
+}
+
+export function getViewCount(id) {
+  const all = getAllViews();
+  return all[id] || 0;
+}
+
+export function incrementView(id) {
+  const all = getAllViews();
+  all[id] = (all[id] || 0) + 1;
+  writeJSON(VIEW_KEY, all);
+  return all[id];
+}
+
+export function topViewedSchools(limit = 5) {
+  const all = getAllViews();
+  return Object.entries(all)
+    .map(([id, count]) => ({ id: Number(id), count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
 }
 
 // ===== Admin mode =====

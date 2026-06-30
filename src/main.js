@@ -4,8 +4,8 @@ import './styles/app.css';
 import { renderHeader, bindHeader } from './views/header.js';
 import { loadSchools, getSchoolById, getFacets } from './lib/data.js';
 import { initView as initList } from './views/list-view.js';
-import { renderDetailView, bindDetailView } from './views/detail-view.js';
-import { getComments, addComment, updateComment, deleteComment, getSchoolOverride, saveSchoolOverride, deleteSchoolOverride, isAdmin, setAdmin, applyTheme } from './lib/store.js';
+import { renderDetailView, bindDetailView, renderCompareView, bindCompareView } from './views/detail-view.js';
+import { getComments, addComment, updateComment, deleteComment, getSchoolOverride, saveSchoolOverride, deleteSchoolOverride, isAdmin, setAdmin, applyTheme, incrementView } from './lib/store.js';
 import { navigate, subscribe, getRoute } from './lib/router.js';
 import { toast } from './lib/ui.js';
 
@@ -82,6 +82,7 @@ async function renderRoute(route) {
         `;
         return;
       }
+      incrementView(school.id);
       host.innerHTML = renderDetailView(school);
       bindDetailView(school);
       window.scrollTo({ top: 0, behavior: 'instant' });
@@ -92,6 +93,32 @@ async function renderRoute(route) {
   }
   if (route.name === 'about') {
     host.innerHTML = `<main class="app-main"><p>关于页暂未实现。</p></main>`;
+  }
+  if (route.name === 'compare') {
+    renderLoading();
+    try {
+      await loadSchools();
+      const a = getSchoolById(route.params.a);
+      const b = getSchoolById(route.params.b);
+      if (!a || !b) {
+        host.innerHTML = `
+          <main class="app-main">
+            <div class="empty-state" style="padding: 80px 16px;">
+              <div class="empty-state-title">找不到要对比的学校</div>
+              <div class="empty-state-text">至少有一所学校不在数据集里。</div>
+              <button type="button" class="btn btn-primary" onclick="location.hash = '#/'">返回列表</button>
+            </div>
+          </main>
+        `;
+        return;
+      }
+      host.innerHTML = renderCompareView(a, b);
+      bindCompareView(a, b);
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    } catch (err) {
+      renderError(err.message || '未知错误');
+    }
+    return;
   }
 }
 

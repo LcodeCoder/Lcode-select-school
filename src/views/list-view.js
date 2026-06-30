@@ -3,9 +3,10 @@ import { escapeHtml } from '../lib/format.js';
 import { renderSchoolCard, renderSkeletonList, renderEmptyState } from './school-card.js';
 import { renderFilterChips } from './filter-chips.js';
 import { renderFilterPanel } from './filter-panel.js';
-import { countComments } from '../lib/store.js';
+import { countComments, topViewedSchools, getViewCount } from '../lib/store.js';
 import { navigate } from '../lib/router.js';
 import { isAdmin } from '../lib/store.js';
+import { getAllSchools } from '../lib/data.js';
 
 const PAGE_SIZE = 20;
 
@@ -82,9 +83,43 @@ function applyFilter() {
 
   if (state.sort === 'comments') {
     filtered.sort((a, b) => countComments(b.id) - countComments(a.id));
+  } else if (state.sort === 'views') {
+    filtered.sort((a, b) => getViewCount(b.id) - getViewCount(a.id));
   } else if (state.sort === 'name') {
     filtered.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans'));
   }
+}
+
+function renderHotBoard() {
+  const top = topViewedSchools(5);
+  if (top.length === 0) return '';
+  const all = getAllSchools();
+  const rankColors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6'];
+  const items = top.map((t, i) => {
+    const s = all.find(x => x.id === t.id);
+    if (!s) return '';
+    const rank = i + 1;
+    const color = rankColors[i] || 'var(--muted-2)';
+    return `
+      <button type="button" class="hot-item" data-school-id="${s.id}">
+        <span class="hot-rank" style="color: ${color};">${rank}</span>
+        <span class="hot-name">${escapeHtml(s.name)}</span>
+        <span class="hot-views">${icon('eye', 14)}<span>${t.count}</span></span>
+      </button>
+    `;
+  }).join('');
+  return `
+    <section class="hot-board" aria-label="热搜学校排名">
+      <div class="hot-board-head">
+        <div class="hot-board-title">
+          <span class="hot-board-icon">${icon('flame', 18)}</span>
+          <span>热搜学校 TOP 5</span>
+        </div>
+        <span class="hot-board-sub">按浏览次数排序</span>
+      </div>
+      <div class="hot-board-list">${items}</div>
+    </section>
+  `;
 }
 
 function renderAll() {
@@ -96,6 +131,8 @@ function renderAll() {
         <h1 class="hero-title">查宿舍，挑学校</h1>
         <p class="hero-sub">三千所院校的宿舍与设施一目了然。搜索、筛选、读评论，在 90 秒内排出你的短名单。</p>
       </section>
+
+      ${renderHotBoard()}
 
       <section class="search-section">
         <div class="search">
@@ -110,6 +147,7 @@ function renderAll() {
           <span><strong class="num">${filtered.length}</strong> 所学校</span>
           <select class="select" id="sort-select" style="height: 32px; font-size: 0.8125rem; padding: 0 28px 0 10px; width: auto; min-width: 110px;" aria-label="排序">
             <option value="default">默认排序</option>
+            <option value="views" ${state.sort === 'views' ? 'selected' : ''}>浏览最多</option>
             <option value="comments" ${state.sort === 'comments' ? 'selected' : ''}>评论最多</option>
             <option value="name" ${state.sort === 'name' ? 'selected' : ''}>校名 A→Z</option>
           </select>
@@ -122,7 +160,16 @@ function renderAll() {
   `;
   host.innerHTML = listHtml;
   bindList();
+  bindHotBoard();
   renderResultsOnly();
+}
+
+function bindHotBoard() {
+  document.querySelectorAll('.hot-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      navigate(`/school/${btn.dataset.schoolId}`);
+    });
+  });
 }
 
 function renderResultsOnly() {

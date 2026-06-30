@@ -7,10 +7,11 @@ import {
 import {
   getComments, addComment, updateComment, deleteComment,
   getSchoolOverride, saveSchoolOverride, deleteSchoolOverride,
-  isSchoolEdited, isAdmin,
+  isSchoolEdited, isAdmin, getViewCount,
 } from '../lib/store.js';
 import { navigate } from '../lib/router.js';
 import { confirmDialog, toast } from '../lib/ui.js';
+import { getAllSchools } from '../lib/data.js';
 
 function row(label, value, opts = {}) {
   if (value == null || value === '') {
@@ -106,10 +107,20 @@ export function renderDetailView(school) {
 
   return `
     <main class="app-main">
-      <a href="#/" class="detail-back" data-back>${icon('back', 16)}<span>返回列表</span></a>
+      <div class="detail-back-row">
+        <a href="#/" class="detail-back" data-back>${icon('back', 16)}<span>返回列表</span></a>
+        <button type="button" class="btn btn-primary detail-vs-btn" id="open-vs">
+          ${icon('vs', 16)}<span>VS 对比</span>
+        </button>
+      </div>
 
       <div class="detail-header">
-        <h1 class="detail-name">${escapeHtml(school.name)}</h1>
+        <div class="detail-title-row">
+          <h1 class="detail-name">${escapeHtml(school.name)}</h1>
+          <span class="detail-views" title="本机浏览次数">
+            ${icon('eye', 14)}<span>${getViewCount(school.id)}</span>
+          </span>
+        </div>
         <div class="detail-meta">
           ${school.province ? `<span>${escapeHtml(school.province)}</span><span class="dot"></span>` : ''}
           ${school.city ? `<span>${escapeHtml(school.city)}</span><span class="dot"></span>` : ''}
@@ -242,6 +253,9 @@ export function bindDetailView(school) {
     // re-navigate to refresh
     navigate(`/school/${school.id}`);
   });
+
+  // VS comparison
+  document.getElementById('open-vs')?.addEventListener('click', () => openVsPicker(school));
 }
 
 function refreshComments(school) {
@@ -447,5 +461,275 @@ function openSchoolEditor(school) {
     // Trigger re-render
     window.dispatchEvent(new CustomEvent('admin-changed', { detail: isAdmin() }));
     navigate(`/school/${school.id}`);
+  });
+}
+
+// ===== VS comparison =====
+function openVsPicker(school) {
+  const all = getAllSchools().filter(s => s.id !== school.id);
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  host.innerHTML = `
+    <dialog id="vs-picker-dialog" aria-label="选择对比学校">
+      <div class="drawer" style="max-width: 560px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
+          <div>
+            <h2 style="font-size: 1.0625rem; display: flex; align-items: center; gap: 8px;">
+              ${icon('vs', 18)}<span>选择对比学校</span>
+            </h2>
+            <p style="color: var(--muted); font-size: 0.8125rem; margin-top: 4px;">
+              当前：<strong style="color: var(--ink-strong);">${escapeHtml(school.name)}</strong>，再选一所进行属性对比。
+            </p>
+          </div>
+          <button type="button" class="btn-ghost" data-close aria-label="关闭">${icon('x', 20)}</button>
+        </div>
+        <div class="field" style="margin-bottom: 12px;">
+          <div class="search">
+            <span class="search-icon">${icon('search', 18)}</span>
+            <input type="search" class="input" id="vs-search" placeholder="搜索学校名 / 城市" autocomplete="off" style="height: 40px;" />
+          </div>
+        </div>
+        <div id="vs-list" style="max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px;">
+          ${renderVsList(all, '')}
+        </div>
+      </div>
+    </dialog>
+  `;
+  const dlg = host.querySelector('dialog');
+  dlg.showModal();
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+  host.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dlg.close()));
+  dlg.addEventListener('close', () => host.remove());
+
+  const search = host.querySelector('#vs-search');
+  const list = host.querySelector('#vs-list');
+  search?.addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    list.innerHTML = renderVsList(all, q);
+    bindVsList(host, school, dlg);
+  });
+  bindVsList(host, school, dlg);
+}
+
+function renderVsList(all, q) {
+  const filtered = q
+    ? all.filter(s => `${s.name} ${s.province} ${s.city}`.toLowerCase().includes(q))
+    : all;
+  if (filtered.length === 0) {
+    return `<div class="text-muted text-small" style="padding: 16px; text-align: center;">没有匹配的学校</div>`;
+  }
+  return filtered.slice(0, 200).map(s => {
+    const f = s.facilities || {};
+    const tags = [];
+    if (f.dormAC === 'yes') tags.push('<span class="tag tag-yes">空调</span>');
+    if (f.privateBath === 'yes') tags.push('<span class="tag tag-yes">独卫</span>');
+    if (f.bedDesk === 'yes') tags.push('<span class="tag tag-yes">上床下桌</span>');
+    if (f.roomSize) tags.push(`<span class="tag tag-info">${escapeHtml(String(f.roomSize))}人间</span>`);
+    return `
+      <button type="button" class="vs-pick-item" data-vs-id="${s.id}">
+        <div class="vs-pick-main">
+          <div class="vs-pick-name">${escapeHtml(s.name)}</div>
+          <div class="vs-pick-meta">${escapeHtml(s.province)} · ${escapeHtml(s.city)}${s.cityType ? ` · ${escapeHtml(s.cityType)}` : ''}</div>
+        </div>
+        <div class="vs-pick-tags">${tags.join('')}</div>
+        ${icon('chevronRight', 16)}
+      </button>
+    `;
+  }).join('');
+}
+
+function bindVsList(host, school, dlg) {
+  host.querySelectorAll('[data-vs-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const otherId = Number(btn.dataset.vsId);
+      dlg.close();
+      navigate(`/compare/${school.id}/${otherId}`);
+    });
+  });
+}
+
+function cmpCell(val, kind) {
+  if (val == null || val === '') return `<span class="cmp-cell cmp-cell-empty">—</span>`;
+  if (kind === 'roomSize') return `<span class="cmp-cell"><span class="tag tag-info">${escapeHtml(String(val))}人间</span></span>`;
+  if (kind) return `<span class="cmp-cell">${tagFor(val, kind)}</span>`;
+  return `<span class="cmp-cell cmp-cell-text">${escapeHtml(String(val))}</span>`;
+}
+
+export function renderCompareView(a, b) {
+  const fa = a.facilities || {};
+  const fb = b.facilities || {};
+  const aa = a.around || {};
+  const ab = b.around || {};
+
+  const rows = [
+    { group: '基础信息', items: [
+      { label: '省份', av: a.province, bv: b.province },
+      { label: '城市', av: a.city, bv: b.city },
+      { label: '城市等级', av: a.cityType, bv: b.cityType },
+      { label: '办学层次', av: a.level, bv: b.level },
+      { label: '办学性质', av: a.nature, bv: b.nature },
+      { label: '地址', av: a.address, bv: b.address },
+      { label: '多校区', av: a.multiCampus, bv: b.multiCampus },
+    ]},
+    { group: '宿舍与设施', items: [
+      { label: '上床下桌', av: fa.bedDesk, bv: fb.bedDesk, kind: 'tag' },
+      { label: '几人间', av: fa.roomSize, bv: fb.roomSize, kind: 'roomSize' },
+      { label: '宿舍空调', av: fa.dormAC, bv: fb.dormAC, kind: 'tag' },
+      { label: '教室空调', av: fa.classAC, bv: fb.classAC, kind: 'tag' },
+      { label: '独立卫浴', av: fa.privateBath, bv: fb.privateBath, kind: 'tag' },
+      { label: '洗澡热水时段', av: fa.hotWater, bv: fb.hotWater },
+      { label: '洗衣机', av: fa.laundry, bv: fb.laundry },
+      { label: '通宵自习室', av: fa.nightStudy, bv: fb.nightStudy },
+      { label: '宿舍限电', av: fa.powerLimit, bv: fb.powerLimit },
+      { label: '夜间断电', av: fa.nightPowerOff, bv: fb.nightPowerOff, kind: 'powerOff' },
+      { label: '夜间断网', av: fa.nightNetOff, bv: fb.nightNetOff, kind: 'netOff' },
+      { label: '校园网速度', av: fa.netSpeed, bv: fb.netSpeed, kind: 'netSpeed' },
+      { label: '校园网价格', av: fa.netPrice, bv: fb.netPrice, kind: 'netPrice' },
+      { label: '大一带电脑', av: fa.bringPC, bv: fb.bringPC, kind: 'tag' },
+      { label: '查寝情况', av: fa.checkDorm, bv: fb.checkDorm, kind: 'checkDorm' },
+      { label: '晚归门禁', av: fa.curfew, bv: fb.curfew, kind: 'curfew' },
+      { label: '早晚自习', av: fa.selfStudy, bv: fb.selfStudy },
+      { label: '晨跑要求', av: fa.morningRun, bv: fb.morningRun },
+      { label: '跑步打卡', av: fa.runCheck, bv: fb.runCheck },
+    ]},
+    { group: '周边生活', items: [
+      { label: '地铁', av: aa.subway, bv: ab.subway, kind: 'tag' },
+      { label: '市区距离', av: aa.cityDistance, bv: ab.cityDistance, kind: 'distance' },
+      { label: '交通便利', av: aa.traffic, bv: ab.traffic, kind: 'traffic' },
+      { label: '点外卖', av: aa.takeout, bv: ab.takeout, kind: 'tag' },
+      { label: '食堂价格', av: aa.canteenPrice, bv: ab.canteenPrice, kind: 'price' },
+      { label: '超市价格', av: aa.storePrice, bv: ab.storePrice, kind: 'price' },
+      { label: '收发快递', av: aa.delivery, bv: ab.delivery },
+      { label: '共享单车', av: aa.sharedBike, bv: ab.sharedBike },
+    ]},
+  ];
+
+  // Fix label typo (checkDorm row above uses fa for b — fix below)
+  rows[1].items.find(it => it.label === '查寝情况').bv = fb.checkDorm;
+
+  const renderSchoolHead = (s, which) => `
+    <div class="cmp-school-head">
+      <div class="cmp-school-name">${escapeHtml(s.name)}</div>
+      <div class="cmp-school-meta">
+        ${s.province ? `${escapeHtml(s.province)}` : ''}${s.city ? ` · ${escapeHtml(s.city)}` : ''}${s.cityType ? ` · ${escapeHtml(s.cityType)}` : ''}
+      </div>
+      <button type="button" class="chip cmp-swap" data-swap="${which}" style="height: 28px; padding: 0 10px; font-size: 0.75rem;">
+        ${icon('swap', 14)}<span>换一所</span>
+      </button>
+    </div>
+  `;
+
+  const tableHtml = rows.map(group => `
+    <div class="cmp-group">
+      <div class="cmp-group-title">${escapeHtml(group.group)}</div>
+      ${group.items.map(item => {
+        return `
+          <div class="cmp-row">
+            <div class="cmp-label">${escapeHtml(item.label)}</div>
+            <div class="cmp-cell-a">${cmpCell(item.av, item.kind)}</div>
+            <div class="cmp-cell-b">${cmpCell(item.bv, item.kind)}</div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `).join('');
+  return `
+    <main class="app-main">
+      <div class="detail-back-row">
+        <a href="#/" class="detail-back" data-back>${icon('back', 16)}<span>返回列表</span></a>
+        <a href="#/school/${a.id}" class="chip" style="height: 32px; padding: 0 12px; font-size: 0.8125rem;">${icon('chevronRight', 14)}<span>看 ${escapeHtml(a.name)} 详情</span></a>
+      </div>
+
+      <section class="cmp-hero">
+        <div class="cmp-hero-icon">${icon('vs', 28)}</div>
+        <h1 class="cmp-hero-title">学校对比</h1>
+        <p class="cmp-hero-sub">逐项查看两所学校的宿舍与设施差异，挑出更适合你的那所。</p>
+      </section>
+
+      <section class="cmp-table">
+        <div class="cmp-head-row">
+          <div class="cmp-label-col"></div>
+          <div class="cmp-school-col cmp-school-a">${renderSchoolHead(a, 'a')}</div>
+          <div class="cmp-school-col cmp-school-b">${renderSchoolHead(b, 'b')}</div>
+        </div>
+        ${tableHtml}
+      </section>
+
+      <div class="cmp-actions">
+        <button type="button" class="btn btn-secondary" id="cmp-swap-a">${icon('swap', 16)}<span>换 A 校</span></button>
+        <button type="button" class="btn btn-secondary" id="cmp-swap-b">${icon('swap', 16)}<span>换 B 校</span></button>
+      </div>
+    </main>
+  `;
+}
+
+export function bindCompareView(a, b) {
+  document.querySelector('[data-back]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    navigate('/');
+  });
+  document.getElementById('cmp-swap-a')?.addEventListener('click', () => openComparePicker(a, b, 'a'));
+  document.getElementById('cmp-swap-b')?.addEventListener('click', () => openComparePicker(a, b, 'b'));
+  document.querySelectorAll('.cmp-swap').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const which = btn.dataset.swap;
+      openComparePicker(a, b, which);
+    });
+  });
+}
+
+function openComparePicker(a, b, which) {
+  const excludeId = which === 'a' ? b.id : a.id;
+  const all = getAllSchools().filter(s => s.id !== excludeId);
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  host.innerHTML = `
+    <dialog id="cmp-picker-dialog" aria-label="选择学校">
+      <div class="drawer" style="max-width: 560px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
+          <h2 style="font-size: 1.0625rem; display: flex; align-items: center; gap: 8px;">
+            ${icon('swap', 18)}<span>更换 ${which === 'a' ? 'A' : 'B'} 校</span>
+          </h2>
+          <button type="button" class="btn-ghost" data-close aria-label="关闭">${icon('x', 20)}</button>
+        </div>
+        <div class="field" style="margin-bottom: 12px;">
+          <div class="search">
+            <span class="search-icon">${icon('search', 18)}</span>
+            <input type="search" class="input" id="cmp-search" placeholder="搜索学校名 / 城市" autocomplete="off" style="height: 40px;" />
+          </div>
+        </div>
+        <div id="cmp-list" style="max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px;">
+          ${renderVsList(all, '')}
+        </div>
+      </div>
+    </dialog>
+  `;
+  const dlg = host.querySelector('dialog');
+  dlg.showModal();
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+  host.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dlg.close()));
+  dlg.addEventListener('close', () => host.remove());
+
+  const search = host.querySelector('#cmp-search');
+  const list = host.querySelector('#cmp-list');
+  search?.addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    list.innerHTML = renderVsList(all, q);
+    bindCompareList(host, a, b, which, dlg);
+  });
+  bindCompareList(host, a, b, which, dlg);
+}
+
+function bindCompareList(host, a, b, which, dlg) {
+  host.querySelectorAll('[data-vs-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const newId = Number(btn.dataset.vsId);
+      dlg.close();
+      if (which === 'a') {
+        navigate(`/compare/${newId}/${b.id}`);
+      } else {
+        navigate(`/compare/${a.id}/${newId}`);
+      }
+    });
   });
 }

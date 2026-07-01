@@ -41,6 +41,16 @@
 }
 .btn-danger:hover { background: var(--accent-tint); }
 
+.btn-sm {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 0.8125rem;
+  border-radius: var(--r-sm);
+}
+@media (min-width: 960px) {
+  .btn-sm { height: 28px; padding: 0 10px; font-size: 0.75rem; }
+}
+
 .btn-ghost {
   background: transparent;
   color: var(--ink);

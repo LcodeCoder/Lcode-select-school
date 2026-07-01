@@ -1,14 +1,17 @@
-// Local storage-backed store for school overrides + comments.
-// Schools are keyed by id; comments are keyed by schoolId.
+// Server-backed store for school overrides, comments, views, and module views.
+// SQLite is the source of truth (shared across devices). localStorage is only
+// a fallback for offline/degraded mode.
 
 import { icon } from './icons.js';
 
-const SCHOOL_KEY = 'dorm:school-overrides';
-const COMMENT_KEY = 'dorm:comments';
+const VIEW_KEY = 'dorm:views';
+const MODULE_VIEW_KEY = 'dorm:module-views';
+const OVERRIDE_CACHE_KEY = 'dorm:school-overrides';
+const COMMENT_CACHE_KEY = 'dorm:comments';
 const ADMIN_KEY = 'dorm:admin';
 const THEME_KEY = 'dorm:theme';
-const VIEW_KEY = 'dorm:views';
-const ADMIN_PASSWORD = 'lyh20041113lyh';
+const ADMIN_TOKEN = 'lyh20041113lyh';
+export { ADMIN_TOKEN };
 
 function readJSON(key, fallback) {
   try {
@@ -28,80 +31,209 @@ function writeJSON(key, value) {
   }
 }
 
-// ===== School overrides =====
-export function getSchoolOverrides() {
-  return readJSON(SCHOOL_KEY, {});
+// ===== School overrides (server-backed) =====
+let overridesCache = null;
+
+export async function getAllSchoolOverrides() {
+  if (overridesCache) return overridesCache;
+  try {
+    const r = await fetch('/api/school-overrides');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    overridesCache = data;
+    writeJSON(OVERRIDE_CACHE_KEY, data);
+    return data;
+  } catch {
+    overridesCache = readJSON(OVERRIDE_CACHE_KEY, {});
+    return overridesCache;
+  }
 }
 
-export function getSchoolOverride(id) {
-  return getSchoolOverrides()[id] || null;
+export function getSchoolOverrideSync(id) {
+  if (overridesCache == null) overridesCache = readJSON(OVERRIDE_CACHE_KEY, {});
+  return overridesCache[id] || null;
 }
 
-export function saveSchoolOverride(id, patch) {
-  const all = getSchoolOverrides();
-  const prev = all[id] || {};
-  all[id] = { ...prev, ...patch, id, updatedAt: Date.now() };
-  writeJSON(SCHOOL_KEY, all);
-  return all[id];
+export async function getSchoolOverride(id) {
+  await getAllSchoolOverrides();
+  return overridesCache[id] || null;
 }
 
-export function deleteSchoolOverride(id) {
-  const all = getSchoolOverrides();
-  delete all[id];
-  writeJSON(SCHOOL_KEY, all);
+export async function saveSchoolOverride(id, patch) {
+  // Optimistic update
+  if (overridesCache == null) overridesCache = readJSON(OVERRIDE_CACHE_KEY, {});
+  const prev = overridesCache[id] || {};
+  overridesCache[id] = { ...prev, ...patch, id, updatedAt: new Date().toISOString() };
+  writeJSON(OVERRIDE_CACHE_KEY, overridesCache);
+
+  try {
+    const r = await fetch(`/api/school-overrides/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN },
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    // Re-sync from server to get the canonical merged version
+    overridesCache = null;
+    await getAllSchoolOverrides();
+    return overridesCache[id];
+  } catch (err) {
+    console.warn('override save failed, kept locally', err);
+    return overridesCache[id];
+  }
+}
+
+export async function deleteSchoolOverride(id) {
+  if (overridesCache == null) overridesCache = readJSON(OVERRIDE_CACHE_KEY, {});
+  delete overridesCache[id];
+  writeJSON(OVERRIDE_CACHE_KEY, overridesCache);
+  try {
+    await fetch(`/api/school-overrides/${id}`, {
+      method: 'DELETE',
+      headers: { 'X-Admin-Token': ADMIN_TOKEN },
+    });
+  } catch (err) {
+    console.warn('override delete failed', err);
+  }
 }
 
 export function isSchoolEdited(id) {
-  return !!getSchoolOverrides()[id];
+  if (overridesCache == null) overridesCache = readJSON(OVERRIDE_CACHE_KEY, {});
+  return !!overridesCache[id];
 }
 
-// ===== Comments =====
-export function getComments(schoolId) {
-  const all = readJSON(COMMENT_KEY, {});
-  return (all[schoolId] || []).slice().sort((a, b) => b.createdAt - a.createdAt);
+// ===== Comments (server-backed) =====
+let commentsCache = null; // { schoolId: [comments] }
+
+export async function getComments(schoolId) {
+  if (commentsCache && commentsCache[schoolId]) return commentsCache[schoolId];
+  try {
+    const r = await fetch(`/api/comments?schoolId=${encodeURIComponent(schoolId)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const list = await r.json();
+    if (!commentsCache) commentsCache = {};
+    commentsCache[schoolId] = list;
+    // Persist to localStorage as fallback
+    const all = readJSON(COMMENT_CACHE_KEY, {});
+    all[schoolId] = list;
+    writeJSON(COMMENT_CACHE_KEY, all);
+    return list;
+  } catch {
+    const all = readJSON(COMMENT_CACHE_KEY, {});
+    return (all[schoolId] || []).slice().sort((a, b) => b.createdAt - a.createdAt);
+  }
 }
 
-export function addComment(schoolId, { author, body }) {
-  const all = readJSON(COMMENT_KEY, {});
-  const list = all[schoolId] || [];
-  const comment = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+export async function addComment(schoolId, { author, body }) {
+  const payload = {
     schoolId,
     author: (author || '匿名').trim().slice(0, 24) || '匿名',
     body: body.trim().slice(0, 600),
-    createdAt: Date.now(),
   };
-  list.push(comment);
-  all[schoolId] = list;
-  writeJSON(COMMENT_KEY, all);
-  return comment;
+  if (!payload.body) throw new Error('body required');
+  try {
+    const r = await fetch('/api/comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const created = await r.json();
+    if (!commentsCache) commentsCache = {};
+    if (!commentsCache[schoolId]) commentsCache[schoolId] = [];
+    commentsCache[schoolId] = [created, ...commentsCache[schoolId]];
+    return created;
+  } catch (err) {
+    // Fallback: keep locally only
+    const all = readJSON(COMMENT_CACHE_KEY, {});
+    const list = all[schoolId] || [];
+    const created = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      schoolId,
+      author: payload.author,
+      body: payload.body,
+      createdAt: Date.now(),
+    };
+    list.push(created);
+    all[schoolId] = list;
+    writeJSON(COMMENT_CACHE_KEY, all);
+    if (!commentsCache) commentsCache = {};
+    if (!commentsCache[schoolId]) commentsCache[schoolId] = [];
+    commentsCache[schoolId] = [created, ...commentsCache[schoolId]];
+    return created;
+  }
 }
 
-export function updateComment(schoolId, commentId, { author, body }) {
-  const all = readJSON(COMMENT_KEY, {});
-  const list = all[schoolId] || [];
-  const idx = list.findIndex(c => c.id === commentId);
-  if (idx === -1) return null;
-  list[idx] = {
-    ...list[idx],
-    author: (author || '匿名').trim().slice(0, 24) || '匿名',
-    body: body.trim().slice(0, 600),
-    updatedAt: Date.now(),
-  };
-  all[schoolId] = list;
-  writeJSON(COMMENT_KEY, all);
-  return list[idx];
+export async function updateComment(schoolId, commentId, { author, body }) {
+  try {
+    const r = await fetch(`/api/comments/${encodeURIComponent(commentId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN },
+      body: JSON.stringify({
+        author: (author || '匿名').trim().slice(0, 24) || '匿名',
+        body: body.trim().slice(0, 600),
+      }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const updated = await r.json();
+    if (commentsCache && commentsCache[schoolId]) {
+      commentsCache[schoolId] = commentsCache[schoolId].map(c => c.id === commentId ? updated : c);
+    }
+    return updated;
+  } catch (err) {
+    // Fallback: update local only
+    const all = readJSON(COMMENT_CACHE_KEY, {});
+    const list = all[schoolId] || [];
+    const idx = list.findIndex(c => c.id === commentId);
+    if (idx === -1) return null;
+    list[idx] = {
+      ...list[idx],
+      author: (author || '匿名').trim().slice(0, 24) || '匿名',
+      body: body.trim().slice(0, 600),
+      updatedAt: Date.now(),
+    };
+    all[schoolId] = list;
+    writeJSON(COMMENT_CACHE_KEY, all);
+    if (commentsCache && commentsCache[schoolId]) {
+      commentsCache[schoolId] = commentsCache[schoolId].map(c => c.id === commentId ? list[idx] : c);
+    }
+    return list[idx];
+  }
 }
 
-export function deleteComment(schoolId, commentId) {
-  const all = readJSON(COMMENT_KEY, {});
-  const list = (all[schoolId] || []).filter(c => c.id !== commentId);
-  all[schoolId] = list;
-  writeJSON(COMMENT_KEY, all);
+export async function deleteComment(schoolId, commentId) {
+  try {
+    await fetch(`/api/comments/${encodeURIComponent(commentId)}`, {
+      method: 'DELETE',
+      headers: { 'X-Admin-Token': ADMIN_TOKEN },
+    });
+  } catch {
+    // fall through to local removal
+  }
+  if (commentsCache && commentsCache[schoolId]) {
+    commentsCache[schoolId] = commentsCache[schoolId].filter(c => c.id !== commentId);
+  }
+  const all = readJSON(COMMENT_CACHE_KEY, {});
+  if (all[schoolId]) {
+    all[schoolId] = all[schoolId].filter(c => c.id !== commentId);
+    writeJSON(COMMENT_CACHE_KEY, all);
+  }
 }
 
-export function countComments(schoolId) {
-  return getComments(schoolId).length;
+export async function countComments(schoolId) {
+  const list = await getComments(schoolId);
+  return list.length;
+}
+
+export async function getAllComments() {
+  try {
+    const r = await fetch('/api/comments');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+  } catch {
+    const all = readJSON(COMMENT_CACHE_KEY, {});
+    return Object.values(all).flat().sort((a, b) => b.createdAt - a.createdAt);
+  }
 }
 
 // ===== School views (hot ranking) =====
@@ -155,6 +287,51 @@ export function topViewedSchools(limit = 5) {
     .map(([id, count]) => ({ id: Number(id), count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, limit);
+}
+
+// ===== Module views (新生指南 / 志愿填报 / 自我提升 整页浏览量) =====
+// Server-backed via /api/module-views. localStorage is a fallback for offline/degraded mode.
+let moduleViewsCache = null;
+
+export async function getAllModuleViews() {
+  if (moduleViewsCache) return moduleViewsCache;
+  try {
+    const r = await fetch('/api/module-views');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const cache = {};
+    for (const [k, v] of Object.entries(data)) cache[k] = Number(v);
+    moduleViewsCache = cache;
+    return cache;
+  } catch {
+    moduleViewsCache = readJSON(MODULE_VIEW_KEY, {});
+    return moduleViewsCache;
+  }
+}
+
+export function getModuleView(mod) {
+  if (moduleViewsCache == null) {
+    moduleViewsCache = readJSON(MODULE_VIEW_KEY, {});
+  }
+  return moduleViewsCache[mod] || 0;
+}
+
+export function incrementModuleView(mod) {
+  if (moduleViewsCache == null) moduleViewsCache = readJSON(MODULE_VIEW_KEY, {});
+  moduleViewsCache[mod] = (moduleViewsCache[mod] || 0) + 1;
+  writeJSON(MODULE_VIEW_KEY, moduleViewsCache);
+
+  fetch(`/api/module-views/${encodeURIComponent(mod)}`, { method: 'POST' })
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (data && typeof data.count === 'number') {
+        moduleViewsCache[mod] = data.count;
+        writeJSON(MODULE_VIEW_KEY, moduleViewsCache);
+      }
+    })
+    .catch(() => {/* fallback already updated locally */});
+
+  return moduleViewsCache[mod];
 }
 
 // ===== Admin mode =====
@@ -220,7 +397,7 @@ export function promptAdmin() {
     host.querySelector('#admin-login-form').addEventListener('submit', (e) => {
       e.preventDefault();
       const v = host.querySelector('#admin-password').value;
-      finish(v === ADMIN_PASSWORD);
+      finish(v === ADMIN_TOKEN);
     });
     dlg.addEventListener('close', () => { if (host.isConnected) finish(false); });
   });

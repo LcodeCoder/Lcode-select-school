@@ -11,7 +11,11 @@ import {
 } from '../lib/store.js';
 import { navigate } from '../lib/router.js';
 import { confirmDialog, toast } from '../lib/ui.js';
-import { getAllSchools } from '../lib/data.js';
+import { getAllSchools, refreshMergedSchools } from '../lib/data.js';
+
+// In-flight comment loads keyed by school id so rapid re-renders don't trigger
+// duplicate fetches.
+const commentsInFlight = new Map();
 
 function row(label, value, opts = {}) {
   if (value == null || value === '') {
@@ -41,12 +45,12 @@ function tagFor(val, kind) {
   return `<span class="tag ${t.cls}">${escapeHtml(t.label)}</span>`;
 }
 
-export function renderDetailView(school) {
+export async function renderDetailView(school) {
   const admin = isAdmin();
   const edited = isSchoolEdited(school.id);
   const f = school.facilities || {};
   const a = school.around || {};
-  const comments = getComments(school.id);
+  const comments = await getComments(school.id);
 
   const facilitiesHtml = `
     <div class="data-grid">
@@ -162,7 +166,7 @@ export function renderDetailView(school) {
 function renderAdminBar(edited) {
   return `
     <div class="admin-bar">
-      <span>${icon('shield', 16)}<strong>管理员模式</strong>·编辑会保存在本机</span>
+      <span>${icon('shield', 16)}<strong>管理员模式</strong>·编辑保存到服务器</span>
       <div class="admin-bar-actions">
         <button type="button" class="btn btn-secondary" id="edit-school" style="height: 32px; padding: 0 12px; font-size: 0.8125rem;">${icon('edit', 14)}<span>编辑</span></button>
         ${edited ? `<button type="button" class="btn btn-danger" id="reset-school" style="height: 32px; padding: 0 12px; font-size: 0.8125rem;">${icon('trash', 14)}<span>还原</span></button>` : ''}
@@ -205,14 +209,14 @@ export function bindDetailView(school) {
   const body = document.getElementById('comment-body');
   const charCount = document.getElementById('char-count');
   body?.addEventListener('input', () => { charCount.textContent = body.value.length; });
-  form?.addEventListener('submit', (e) => {
+  form?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const author = document.getElementById('comment-author').value;
     const text = body.value.trim();
     if (!text) { toast('写两句再发吧'); return; }
-    addComment(school.id, { author, body: text });
+    await addComment(school.id, { author, body: text });
     toast('已发表');
-    refreshComments(school);
+    await refreshComments(school);
     body.value = '';
     charCount.textContent = '0';
   });
@@ -223,14 +227,14 @@ export function bindDetailView(school) {
     card.querySelector('[data-act="delete"]')?.addEventListener('click', async () => {
       const ok = await confirmDialog({
         title: '删除评论？',
-        message: '这条评论会从本机永久删除。',
+        message: '这条评论会从服务器永久删除。',
         confirmText: '删除',
         danger: true,
       });
       if (!ok) return;
-      deleteComment(school.id, cid);
+      await deleteComment(school.id, cid);
       toast('已删除');
-      refreshComments(school);
+      await refreshComments(school);
     });
     card.querySelector('[data-act="edit"]')?.addEventListener('click', () => {
       openCommentEditor(school, cid);
@@ -242,12 +246,13 @@ export function bindDetailView(school) {
   document.getElementById('reset-school')?.addEventListener('click', async () => {
     const ok = await confirmDialog({
       title: '还原学校数据？',
-      message: '你在本机对这所学校的编辑会被清除，恢复到 Excel 原始数据。',
+      message: '你在服务器上对这所学校的编辑会被清除，恢复到 Excel 原始数据。',
       confirmText: '还原',
       danger: true,
     });
     if (!ok) return;
-    deleteSchoolOverride(school.id);
+    await deleteSchoolOverride(school.id);
+    refreshMergedSchools();
     toast('已还原');
     window.dispatchEvent(new CustomEvent('admin-changed', { detail: isAdmin() }));
     // re-navigate to refresh
@@ -258,38 +263,39 @@ export function bindDetailView(school) {
   document.getElementById('open-vs')?.addEventListener('click', () => openVsPicker(school));
 }
 
-function refreshComments(school) {
+async function refreshComments(school) {
   const list = document.getElementById('comment-list');
   if (!list) return;
   const admin = isAdmin();
-  const comments = getComments(school.id);
+  const comments = await getComments(school.id);
   if (comments.length === 0) {
     list.innerHTML = `<div class="empty-state" style="padding: 32px 16px;">
       <div class="empty-state-emoji" aria-hidden="true">📝</div>
       <div class="empty-state-text">还没有评论。住过这所学校？留下第一条。</div>
     </div>`;
-    return;
-  }
-  list.innerHTML = comments.map(c => renderComment(c, admin)).join('');
-  // rebind
-  list.querySelectorAll('[data-comment-id]').forEach(card => {
-    const cid = card.dataset.commentId;
-    card.querySelector('[data-act="delete"]')?.addEventListener('click', async () => {
-      const ok = await confirmDialog({ title: '删除评论？', message: '这条评论会从本机永久删除。', confirmText: '删除', danger: true });
-      if (!ok) return;
-      deleteComment(school.id, cid);
-      toast('已删除');
-      refreshComments(school);
+  } else {
+    list.innerHTML = comments.map(c => renderComment(c, admin)).join('');
+    // rebind
+    list.querySelectorAll('[data-comment-id]').forEach(card => {
+      const cid = card.dataset.commentId;
+      card.querySelector('[data-act="delete"]')?.addEventListener('click', async () => {
+        const ok = await confirmDialog({ title: '删除评论？', message: '这条评论会从服务器永久删除。', confirmText: '删除', danger: true });
+        if (!ok) return;
+        await deleteComment(school.id, cid);
+        toast('已删除');
+        await refreshComments(school);
+      });
+      card.querySelector('[data-act="edit"]')?.addEventListener('click', () => openCommentEditor(school, cid));
     });
-    card.querySelector('[data-act="edit"]')?.addEventListener('click', () => openCommentEditor(school, cid));
-  });
+  }
   // Update count in heading
   const countEl = document.querySelector('.detail-section-title .count');
   if (countEl) countEl.textContent = comments.length;
 }
 
-function openCommentEditor(school, commentId) {
-  const existing = getComments(school.id).find(c => c.id === commentId);
+async function openCommentEditor(school, commentId) {
+  const all = await getComments(school.id);
+  const existing = all.find(c => c.id === commentId);
   if (!existing) return;
   const host = document.createElement('div');
   document.body.appendChild(host);
@@ -320,20 +326,20 @@ function openCommentEditor(school, commentId) {
   dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
   host.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dlg.close()));
   dlg.addEventListener('close', () => host.remove());
-  host.querySelector('#comment-edit-form').addEventListener('submit', (e) => {
+  host.querySelector('#comment-edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const author = host.querySelector('#edit-author').value;
     const body = host.querySelector('#edit-body').value.trim();
     if (!body) { toast('写两句再保存'); return; }
-    updateComment(school.id, commentId, { author, body });
+    await updateComment(school.id, commentId, { author, body });
     toast('已保存');
     dlg.close();
-    refreshComments(school);
+    await refreshComments(school);
   });
 }
 
-function openSchoolEditor(school) {
-  const override = getSchoolOverride(school.id) || {};
+async function openSchoolEditor(school) {
+  const override = (await getSchoolOverride(school.id)) || {};
   const f = { ...school.facilities, ...override.facilities };
   const a = { ...school.around, ...override.around };
   const base = { ...school, ...override };
@@ -433,7 +439,7 @@ function openSchoolEditor(school) {
   host.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dlg.close()));
   dlg.addEventListener('close', () => host.remove());
 
-  host.querySelector('#school-edit-form').addEventListener('submit', (e) => {
+  host.querySelector('#school-edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const patch = { facilities: {}, around: {} };
     host.querySelectorAll('[data-k]').forEach(input => {
@@ -455,9 +461,11 @@ function openSchoolEditor(school) {
       const input = host.querySelector(`[data-k="${k}"]`);
       if (input) patch[k] = input.value;
     });
-    saveSchoolOverride(school.id, patch);
-    toast('已保存到本机');
     dlg.close();
+    toast('保存中…');
+    await saveSchoolOverride(school.id, patch);
+    refreshMergedSchools();
+    toast('已保存到服务器');
     // Trigger re-render
     window.dispatchEvent(new CustomEvent('admin-changed', { detail: isAdmin() }));
     navigate(`/school/${school.id}`);

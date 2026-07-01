@@ -3,7 +3,7 @@ import { escapeHtml } from '../lib/format.js';
 import { renderSchoolCard, renderSkeletonList, renderEmptyState } from './school-card.js';
 import { renderFilterChips } from './filter-chips.js';
 import { renderFilterPanel } from './filter-panel.js';
-import { countComments, topViewedSchools, getViewCount } from '../lib/store.js';
+import { topViewedSchools, getViewCount, getAllComments } from '../lib/store.js';
 import { navigate } from '../lib/router.js';
 import { isAdmin } from '../lib/store.js';
 import { getAllSchools } from '../lib/data.js';
@@ -31,6 +31,11 @@ const defaultState = () => ({
 let state = defaultState();
 let allSchools = [];
 let filtered = [];
+// Comment counts cache (schoolId → count). Filled asynchronously after the
+// list renders so comment-sort/card badges don't block the page paint.
+let commentCounts = {};
+let commentCountsLoaded = false;
+let commentCountsInFlight = null;
 
 export function setState(patch) {
   state = { ...state, ...patch };
@@ -46,13 +51,70 @@ export async function initView(schools, facets) {
   state.facets = facets;
   applyFilter();
   renderAll();
+  // Kick off comment count load in the background — cards/sort will refresh
+  // when the data lands.
+  loadCommentCounts();
+}
+
+async function loadCommentCounts() {
+  if (commentCountsInFlight) return commentCountsInFlight;
+  commentCountsInFlight = (async () => {
+    try {
+      const all = await getAllComments();
+      const map = {};
+      for (const c of all) map[c.schoolId] = (map[c.schoolId] || 0) + 1;
+      commentCounts = map;
+      commentCountsLoaded = true;
+      // If the user is currently on a comment-sorted view, re-sort and re-render.
+      if (state.sort === 'comments') {
+        applyFilter();
+        renderResultsOnly();
+      } else {
+        // Just refresh the badges on visible cards.
+        refreshCommentBadges();
+      }
+    } catch (err) {
+      console.warn('comment counts load failed', err);
+    } finally {
+      commentCountsInFlight = null;
+    }
+  })();
+  return commentCountsInFlight;
+}
+
+function refreshCommentBadges() {
+  document.querySelectorAll('[data-comment-count]').forEach(span => {
+    const id = Number(span.dataset.commentCount);
+    span.textContent = commentCounts[id] || 0;
+  });
+}
+
+function schoolHay(s) {
+  const f = s.facilities || {};
+  const a = s.around || {};
+  const parts = [
+    s.name, s.province, s.city, s.address || '',
+    // facility tags (values are 'yes'/'no'/'partial' or labels like '较贵')
+    f.dormAC === 'yes' ? '空调 有空调' : f.dormAC === 'partial' ? '部分有空调 空调' : '',
+    f.bedDesk === 'yes' ? '上床下桌' : f.bedDesk === 'partial' ? '部分上床下桌 上床下桌' : '',
+    f.privateBath === 'yes' ? '卫浴 独立卫浴' : f.privateBath === 'partial' ? '部分卫浴 卫浴' : '',
+    a.subway === 'yes' ? '地铁 地铁直达' : a.subway === 'partial' ? '部分地铁 地铁' : '',
+    f.roomSize ? `${f.roomSize}人间 ${f.roomSize}人` : '',
+    f.nightPowerOff || '',
+    f.nightNetOff || '',
+    f.netSpeed || '',
+    f.netPrice || '',
+    f.curfew || '',
+    s.level || '', s.nature || '', s.cityType || '',
+  ];
+  return parts.filter(Boolean).join(' ');
 }
 
 function applyFilter() {
   const q = state.q.trim().toLowerCase();
   filtered = allSchools.filter(s => {
     if (q) {
-      const hay = `${s.name} ${s.province} ${s.city} ${s.address || ''}`.toLowerCase();
+      const hay = schoolHay(s).toLowerCase();
       if (!hay.includes(q)) return false;
     }
     if (state.province && s.province !== state.province) return false;
@@ -82,7 +144,13 @@ function applyFilter() {
   });
 
   if (state.sort === 'comments') {
-    filtered.sort((a, b) => countComments(b.id) - countComments(a.id));
+    if (!commentCountsLoaded) {
+      // Fall back to views sort until comment counts land; the re-render will
+      // be triggered by loadCommentCounts().
+      filtered.sort((a, b) => getViewCount(b.id) - getViewCount(a.id));
+    } else {
+      filtered.sort((a, b) => (commentCounts[b.id] || 0) - (commentCounts[a.id] || 0));
+    }
   } else if (state.sort === 'views') {
     filtered.sort((a, b) => getViewCount(b.id) - getViewCount(a.id));
   } else if (state.sort === 'name') {
@@ -216,7 +284,7 @@ function renderAll() {
       <section class="search-section">
         <div class="search">
           <span class="search-icon">${icon('search', 20)}</span>
-          <input type="search" id="search-input" class="input" placeholder="学校名 / 城市 / 地址关键字" enterkeyhint="search" autocomplete="off" />
+          <input type="search" id="search-input" class="input" placeholder="学校名 / 城市 / 空调 / 上床下桌 / 卫浴 / 地铁 …" enterkeyhint="search" autocomplete="off" />
         </div>
         ${renderFilterChips(state)}
       </section>
@@ -273,7 +341,7 @@ function renderResultsOnly() {
   const end = start + PAGE_SIZE;
   const pageItems = filtered.slice(start, end);
 
-  results.innerHTML = `<div class="school-list">${pageItems.map(s => renderSchoolCard(s, countComments(s.id))).join('')}</div>`;
+  results.innerHTML = `<div class="school-list">${pageItems.map(s => renderSchoolCard(s, commentCounts[s.id] || 0)).join('')}</div>`;
 
   // Bind card click
   results.querySelectorAll('[data-school-id]').forEach(btn => {

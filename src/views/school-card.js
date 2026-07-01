@@ -49,7 +49,7 @@ export function renderSchoolCard(school, commentCount = 0) {
       </div>
       ${tags.length ? `<div class="school-card-tags">${tags.join('')}</div>` : ''}
       <div class="school-card-foot">
-        <span class="comment-count"><span class="comment-emoji" aria-hidden="true">💬</span><span>${commentCount}</span></span>
+        <span class="comment-count"><span class="comment-emoji" aria-hidden="true">💬</span><span data-comment-count="${school.id}">${commentCount}</span></span>
         <span class="arrow">看详情 ${icon('chevronRight', 14)}</span>
       </div>
     </button>

@@ -3,6 +3,9 @@
 //   #/school/:id             → detail
 //   #/compare/:id1/:id2      → compare
 //   #/about                  → about
+//   #/guide | #/exam | #/growth  → articles (module list)
+//   #/article/:id            → article detail
+//   #/admin                  → admin panel
 
 function parse() {
   const hash = location.hash.replace(/^#/, '');
@@ -15,6 +18,13 @@ function parse() {
     return { name: 'compare', params: { a: decodeURIComponent(parts[1]), b: decodeURIComponent(parts[2]) } };
   }
   if (parts[0] === 'about') return { name: 'about', params: {} };
+  if (parts[0] === 'admin') return { name: 'admin', params: {} };
+  if (['guide', 'exam', 'growth'].includes(parts[0])) {
+    return { name: 'articles', params: { module: parts[0] } };
+  }
+  if (parts[0] === 'article' && parts[1]) {
+    return { name: 'article', params: { id: decodeURIComponent(parts[1]) } };
+  }
   return { name: 'list', params: {} };
 }
 

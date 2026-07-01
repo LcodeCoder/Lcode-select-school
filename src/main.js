@@ -1,11 +1,14 @@
 import './styles/base.css';
 import './styles/components.css';
 import './styles/app.css';
-import { renderHeader, bindHeader } from './views/header.js';
+import { renderHeader, bindHeader, refreshTabs } from './views/header.js';
 import { loadSchools, getSchoolById, getFacets } from './lib/data.js';
 import { initView as initList } from './views/list-view.js';
 import { renderDetailView, bindDetailView, renderCompareView, bindCompareView } from './views/detail-view.js';
-import { getComments, addComment, updateComment, deleteComment, getSchoolOverride, saveSchoolOverride, deleteSchoolOverride, isAdmin, setAdmin, applyTheme, getAllViews, incrementView } from './lib/store.js';
+import { initArticleListView } from './views/article-list-view.js';
+import { initArticleDetailView } from './views/article-detail-view.js';
+import { initAdminView } from './views/admin-view.js';
+import { isAdmin, setAdmin, applyTheme, getAllViews, incrementView } from './lib/store.js';
 import { navigate, subscribe, getRoute } from './lib/router.js';
 import { toast } from './lib/ui.js';
 
@@ -54,6 +57,7 @@ function renderError(message) {
 }
 
 async function renderRoute(route) {
+  refreshTabs();
   const host = document.getElementById('view-host');
   if (route.name === 'list') {
     renderLoading();
@@ -85,7 +89,7 @@ async function renderRoute(route) {
         return;
       }
       const newCount = incrementView(school.id);
-      host.innerHTML = renderDetailView(school);
+      host.innerHTML = await renderDetailView(school);
       bindDetailView(school);
       const viewsSpan = host.querySelector('.detail-views span');
       if (viewsSpan) viewsSpan.textContent = newCount;
@@ -119,6 +123,33 @@ async function renderRoute(route) {
       host.innerHTML = renderCompareView(a, b);
       bindCompareView(a, b);
       window.scrollTo({ top: 0, behavior: 'instant' });
+    } catch (err) {
+      renderError(err.message || '未知错误');
+    }
+    return;
+  }
+  if (route.name === 'articles') {
+    renderLoading();
+    try {
+      await initArticleListView(route.params.module);
+    } catch (err) {
+      renderError(err.message || '未知错误');
+    }
+    return;
+  }
+  if (route.name === 'article') {
+    renderLoading();
+    try {
+      await initArticleDetailView(route.params.id);
+    } catch (err) {
+      renderError(err.message || '未知错误');
+    }
+    return;
+  }
+  if (route.name === 'admin') {
+    renderLoading();
+    try {
+      await initAdminView();
     } catch (err) {
       renderError(err.message || '未知错误');
     }

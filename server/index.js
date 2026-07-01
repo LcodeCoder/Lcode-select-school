@@ -52,6 +52,35 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_comments_school ON comments(school_id);
 `);
 
+// Auto-seed articles on first run. SEED_PATH points at articles.json baked
+// into the image (or the local scripts/materials-out path during dev).
+const SEED_PATH = process.env.SEED_PATH || join(ROOT, 'scripts', 'materials-out', 'articles.json');
+try {
+  const n = db.prepare('SELECT COUNT(*) AS n FROM articles').get().n;
+  if (n === 0) {
+    const raw = await readFile(SEED_PATH, 'utf8');
+    const articles = JSON.parse(raw);
+    const insArt = db.prepare(
+      `INSERT INTO articles (module, category, title, source, ord, blocks_json, raw_len) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    db.exec('BEGIN;');
+    let seeded = 0;
+    for (const a of articles) {
+      insArt.run(
+        a.module, a.category, a.title, a.source || null, a.order || 0,
+        JSON.stringify(a.blocks || []), a.rawLen || 0
+      );
+      seeded++;
+    }
+    db.exec('COMMIT;');
+    console.log(`Seeded ${seeded} articles from ${SEED_PATH}`);
+  } else {
+    console.log(`articles already populated (${n} rows), skip seed`);
+  }
+} catch (err) {
+  console.warn(`article seed skipped: ${err.message}`);
+}
+
 // Prepared statements — school views
 const incrementStmt = db.prepare(
   'INSERT INTO views (school_id, count) VALUES (?, 1) ON CONFLICT(school_id) DO UPDATE SET count = count + 1 RETURNING count'

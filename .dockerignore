@@ -3,7 +3,9 @@ dist
 .git
 .gitignore
 .shots
+.tmp
 *.log
 .DS_Store
 .vscode
 .idea
+data

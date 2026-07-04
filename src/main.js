@@ -15,6 +15,81 @@ import { initCompareLabView, renderCompareMultiView, bindCompareMultiView } from
 import { isAdmin, setAdmin, applyTheme, getAllViews, incrementView } from './lib/store.js';
 import { navigate, subscribe, getRoute } from './lib/router.js';
 import { toast } from './lib/ui.js';
+import { icon } from './lib/icons.js';
+
+
+const RESUME_PROMO_URL = 'https://resume.lcode.space';
+const RESUME_PROMO_SESSION_KEY = 'lcode-resume-promo-seen-v1';
+
+function shouldShowResumePromo() {
+  try {
+    if (sessionStorage.getItem(RESUME_PROMO_SESSION_KEY) === '1') return false;
+    sessionStorage.setItem(RESUME_PROMO_SESSION_KEY, '1');
+  } catch (err) {
+    // Storage may be unavailable in private modes; still show the useful prompt.
+  }
+  return true;
+}
+
+function showResumePromoDialog() {
+  if (!shouldShowResumePromo()) return;
+  if (document.querySelector('.resume-promo-dialog')) return;
+
+  const dlg = document.createElement('dialog');
+  dlg.className = 'resume-promo-dialog';
+  dlg.setAttribute('aria-labelledby', 'resume-promo-title');
+  dlg.setAttribute('aria-describedby', 'resume-promo-desc');
+  dlg.innerHTML = `
+    <div class="resume-promo-shell">
+      <button type="button" class="resume-promo-close" aria-label="关闭弹窗">${icon('x', 18)}</button>
+      <div class="resume-promo-visual" aria-hidden="true">
+        <div class="resume-promo-sheet">
+          <span class="resume-promo-avatar">简</span>
+          <span class="resume-promo-line strong"></span>
+          <span class="resume-promo-line"></span>
+          <span class="resume-promo-line short"></span>
+          <span class="resume-promo-chip">PDF</span>
+        </div>
+      </div>
+      <div class="resume-promo-content">
+        <div class="resume-promo-badge">${icon('doc', 16)}<span>免费简历工具</span></div>
+        <h2 id="resume-promo-title">免费制作简历，导出不花钱</h2>
+        <p id="resume-promo-desc">从校园经历、实习项目到求职亮点，按步骤填写即可生成清爽专业的中文简历，适合大学新生、实习和校招场景。</p>
+        <ul class="resume-promo-points" aria-label="简历网站特色">
+          <li>${icon('check', 15)}在线编辑，模板简洁易读</li>
+          <li>${icon('check', 15)}免费导出，手机电脑都能用</li>
+          <li>${icon('check', 15)}适合实习、社团、校招投递</li>
+        </ul>
+        <div class="resume-promo-actions">
+          <a class="btn btn-primary resume-promo-cta" href="${RESUME_PROMO_URL}" target="_blank" rel="noopener noreferrer">立即免费制作${icon('chevronRight', 16)}</a>
+          <button type="button" class="btn btn-secondary resume-promo-later">先看看学校</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const close = () => {
+    if (dlg.open) dlg.close();
+    else dlg.remove();
+  };
+
+  dlg.addEventListener('click', (event) => {
+    if (event.target === dlg) close();
+  });
+  dlg.addEventListener('close', () => dlg.remove(), { once: true });
+  dlg.querySelector('.resume-promo-close')?.addEventListener('click', close);
+  dlg.querySelector('.resume-promo-later')?.addEventListener('click', close);
+  dlg.querySelector('.resume-promo-cta')?.addEventListener('click', () => {
+    window.setTimeout(close, 80);
+  });
+
+  document.body.appendChild(dlg);
+  if (typeof dlg.showModal === 'function') {
+    dlg.showModal();
+  } else {
+    dlg.setAttribute('open', '');
+  }
+}
 
 // Apply theme before any view renders to avoid flash
 applyTheme();
@@ -205,6 +280,10 @@ function boot() {
     renderRoute(route);
   });
   renderRoute(getRoute());
+
+  window.requestAnimationFrame(() => {
+    window.setTimeout(showResumePromoDialog, 420);
+  });
 
   // Re-render current view when admin mode toggles
   window.addEventListener('admin-changed', () => {

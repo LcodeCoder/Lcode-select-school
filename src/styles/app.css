@@ -2722,3 +2722,195 @@ mark {
   .major-starter { grid-template-columns: 1fr; }
   .global-search-box .input { height: 44px; }
 }
+
+/* ===== First-open resume promo dialog ===== */
+.resume-promo-dialog[open] {
+  position: fixed;
+  inset: 0;
+  width: min(92vw, 560px);
+  max-width: min(92vw, 560px);
+  max-height: min(90dvh, 640px);
+  margin: auto;
+  overflow: visible;
+}
+.resume-promo-dialog::backdrop {
+  background: oklch(0.1 0.02 268.5 / 0.58);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.resume-promo-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: 152px 1fr;
+  gap: 20px;
+  max-height: min(90dvh, 640px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid color-mix(in oklch, var(--primary) 18%, var(--line));
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 12% 12%, color-mix(in oklch, var(--primary) 12%, transparent) 0 92px, transparent 170px),
+    linear-gradient(135deg, color-mix(in oklch, var(--primary) 5%, var(--surface)) 0%, var(--surface) 58%);
+  box-shadow: var(--shadow-pop);
+}
+.resume-promo-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  background: color-mix(in oklch, var(--surface-2) 86%, transparent);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.resume-promo-close:hover {
+  color: var(--ink-strong);
+  background: var(--surface-2);
+  transform: translateY(-1px);
+}
+.resume-promo-visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 210px;
+  border-radius: 18px;
+  background: color-mix(in oklch, var(--primary) 8%, var(--surface-2));
+  border: 1px solid color-mix(in oklch, var(--primary) 16%, var(--line));
+}
+.resume-promo-sheet {
+  position: relative;
+  width: 108px;
+  min-height: 144px;
+  padding: 16px 14px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--primary) 18%, var(--line));
+  box-shadow: 0 14px 34px color-mix(in oklch, var(--primary) 16%, transparent);
+}
+.resume-promo-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 14px;
+  border-radius: 50%;
+  background: var(--primary-tint);
+  color: var(--primary);
+  font-weight: 700;
+}
+.resume-promo-line {
+  display: block;
+  height: 7px;
+  margin-top: 9px;
+  border-radius: var(--r-pill);
+  background: var(--line-strong);
+}
+.resume-promo-line.strong {
+  width: 78%;
+  background: color-mix(in oklch, var(--primary) 42%, var(--line-strong));
+}
+.resume-promo-line.short { width: 58%; }
+.resume-promo-chip {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  padding: 3px 7px;
+  border-radius: var(--r-sm);
+  background: color-mix(in oklch, var(--accent) 14%, var(--surface));
+  color: var(--accent);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.resume-promo-content {
+  min-width: 0;
+  padding: 6px 32px 2px 0;
+}
+.resume-promo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 5px 10px;
+  border-radius: var(--r-pill);
+  background: var(--primary-tint);
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+.resume-promo-badge svg { color: currentColor; }
+.resume-promo-content h2 {
+  margin-top: 12px;
+  max-width: 11em;
+  font-size: 1.35rem;
+  line-height: 1.28;
+  letter-spacing: -0.02em;
+}
+.resume-promo-content p {
+  margin-top: 10px;
+  color: var(--ink-soft);
+  font-size: 0.9375rem;
+  line-height: 1.72;
+}
+.resume-promo-points {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  color: var(--ink);
+  font-size: 0.875rem;
+}
+.resume-promo-points li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+.resume-promo-points svg {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  color: var(--success);
+}
+.resume-promo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+.resume-promo-cta svg { color: currentColor; }
+@media (max-width: 560px) {
+  .resume-promo-dialog[open] {
+    width: min(94vw, 390px);
+    max-width: min(94vw, 390px);
+  }
+  .resume-promo-shell {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 18px;
+    border-radius: 20px;
+  }
+  .resume-promo-visual {
+    min-height: 128px;
+    padding: 14px;
+    justify-content: flex-start;
+  }
+  .resume-promo-sheet {
+    width: 100%;
+    min-height: 106px;
+  }
+  .resume-promo-content { padding-right: 0; }
+  .resume-promo-content h2 {
+    max-width: 12em;
+    font-size: 1.2rem;
+  }
+  .resume-promo-actions {
+    flex-direction: column;
+  }
+  .resume-promo-actions .btn {
+    width: 100%;
+  }
+}

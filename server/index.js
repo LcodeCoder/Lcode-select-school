@@ -1,14 +1,20 @@
 import { createServer } from 'node:http';
 import { readFile, stat, mkdir } from 'node:fs/promises';
-import { join, extname, normalize, dirname } from 'node:path';
+import { join, extname, normalize, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { normalizeArticle } from '../src/lib/article-normalizer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const DIST = join(ROOT, 'dist');
 const DB_PATH = process.env.DB_PATH || join(ROOT, 'data', 'views.db');
 const PORT = Number(process.env.PORT) || 80;
+
+const API_CACHE_TTL = Number(process.env.API_CACHE_TTL_MS) || 5 * 60 * 1000;
+const STATIC_CACHE_TTL = Number(process.env.STATIC_CACHE_TTL_MS) || 10 * 60 * 1000;
+const apiCache = new Map();
+const staticCache = new Map();
 
 await mkdir(dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
@@ -152,13 +158,90 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
 };
 
-function sendJson(res, status, body) {
+function sendJson(res, status, body, extraHeaders = {}) {
   const payload = Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': payload.length,
+    ...extraHeaders,
   });
   res.end(payload);
+}
+
+function getApiCache(key) {
+  const hit = apiCache.get(key);
+  if (!hit || hit.expires < Date.now()) {
+    apiCache.delete(key);
+    return null;
+  }
+  return hit.body;
+}
+
+function setApiCache(key, body, ttl = API_CACHE_TTL) {
+  apiCache.set(key, { body, expires: Date.now() + ttl });
+  return body;
+}
+
+function clearArticleCache() {
+  for (const key of apiCache.keys()) {
+    if (key.startsWith('articles:')) apiCache.delete(key);
+  }
+}
+
+function cachedJson(res, key, producer, ttl) {
+  const cached = getApiCache(key);
+  if (cached) return sendJson(res, 200, cached, { 'Cache-Control': 'private, max-age=60', 'X-Cache': 'HIT' });
+  const body = setApiCache(key, producer(), ttl);
+  return sendJson(res, 200, body, { 'Cache-Control': 'private, max-age=60', 'X-Cache': 'MISS' });
+}
+
+function contentDisposition(filename) {
+  const safe = basename(filename || 'download').replace(/[\r\n"]/g, '_');
+  return `attachment; filename*=UTF-8''${encodeURIComponent(safe)}`;
+}
+
+function articleSourceCandidates(source) {
+  const file = basename(String(source || '').trim());
+  if (!file) return [];
+  const envDirs = String(process.env.ARTICLE_SOURCE_DIRS || '')
+    .split(process.platform === 'win32' ? ';' : ':')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const roots = [
+    ...envDirs,
+    join(ROOT, 'public', 'materials'),
+    join(ROOT, 'public', 'originals'),
+    join(ROOT, 'materials'),
+    join(ROOT, 'scripts', 'materials-out', 'originals'),
+  ];
+  return roots.map(dir => join(dir, file));
+}
+
+async function sendArticleDownload(res, row) {
+  const source = row?.source || '';
+  const fileName = basename(source);
+  if (!fileName) return sendJson(res, 404, { error: 'no source file' });
+
+  for (const candidate of articleSourceCandidates(source)) {
+    try {
+      const s = await stat(candidate);
+      if (!s.isFile()) continue;
+      const buf = await readFile(candidate);
+      const ext = extname(candidate).toLowerCase();
+      res.writeHead(200, {
+        'Content-Type': MIME[ext] || 'application/octet-stream',
+        'Content-Length': buf.length,
+        'Content-Disposition': contentDisposition(fileName),
+        'Cache-Control': 'private, max-age=3600',
+      });
+      return res.end(buf);
+    } catch {}
+  }
+
+  return sendJson(res, 404, {
+    error: 'source file not found',
+    message: `原文件「${fileName}」没有随当前项目打包。可把原始资料放到 public/materials/，或设置 ARTICLE_SOURCE_DIRS 后重启服务。`,
+  });
 }
 
 function sendText(res, status, msg) {
@@ -196,9 +279,23 @@ async function serveStatic(req, res, urlPath) {
   }
 
   try {
-    const buf = await readFile(filePath);
     const ext = extname(filePath).toLowerCase();
-    const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+    const cacheable = STATIC_CACHE_TTL > 0
+      && !filePath.endsWith('index.html')
+      && (urlPath.startsWith('/assets/') || urlPath.startsWith('/data/') || ['.js', '.css', '.json', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.ico', '.woff', '.woff2'].includes(ext));
+    const cacheKey = filePath;
+    const cached = cacheable ? staticCache.get(cacheKey) : null;
+    if (cached && cached.expires > Date.now()) {
+      res.writeHead(200, { ...cached.headers, 'X-Static-Cache': 'HIT' });
+      return res.end(cached.buf);
+    }
+    if (cached) staticCache.delete(cacheKey);
+
+    const buf = await readFile(filePath);
+    const headers = {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Content-Length': buf.length,
+    };
 
     if (urlPath.startsWith('/assets/')) {
       headers['Cache-Control'] = 'public, max-age=31536000, immutable';
@@ -207,6 +304,12 @@ async function serveStatic(req, res, urlPath) {
     } else if (filePath.endsWith('index.html')) {
       headers['Cache-Control'] = 'no-cache';
     }
+
+    if (cacheable) {
+      staticCache.set(cacheKey, { buf, headers: { ...headers }, expires: Date.now() + STATIC_CACHE_TTL });
+      headers['X-Static-Cache'] = 'MISS';
+    }
+
     res.writeHead(200, headers);
     res.end(buf);
   } catch {
@@ -280,22 +383,40 @@ const server = createServer(async (req, res) => {
     const cat = url.searchParams.get('category') || '';
     if (!mod) {
       // No module: return all (metadata only)
-      const rows = db.prepare(
+      return cachedJson(res, 'articles:all', () => db.prepare(
         `SELECT id, module, category, title, source, ord, raw_len, created_at FROM articles ORDER BY module, ord, id`
-      ).all();
-      return sendJson(res, 200, rows);
+      ).all());
     }
     try {
-      const rows = cat
-        ? db.prepare(
-            `SELECT id, module, category, title, source, ord, raw_len, created_at FROM articles WHERE module = ? AND category = ? ORDER BY ord, id`
-          ).all(mod, cat)
-        : articleListStmt.all(mod);
-      const cats = articleCategoriesStmt.all(mod);
-      return sendJson(res, 200, { items: rows, categories: cats });
+      const cacheKey = `articles:list:${mod}:${cat}`;
+      return cachedJson(res, cacheKey, () => {
+        const rows = cat
+          ? db.prepare(
+              `SELECT id, module, category, title, source, ord, raw_len, created_at FROM articles WHERE module = ? AND category = ? ORDER BY ord, id`
+            ).all(mod, cat)
+          : articleListStmt.all(mod);
+        const cats = articleCategoriesStmt.all(mod);
+        return { items: rows, categories: cats };
+      });
     } catch (err) {
       console.error('article list failed', err);
       return sendJson(res, 500, { error: 'db error' });
+    }
+  }
+
+  if (req.method === 'GET' && path.startsWith('/api/articles/') && path.endsWith('/download')) {
+    const idStr = path.slice('/api/articles/'.length, -'/download'.length);
+    const id = Number(idStr);
+    if (!Number.isInteger(id) || id <= 0) {
+      return sendJson(res, 400, { error: 'invalid article id' });
+    }
+    try {
+      const row = articleByIdStmt.get(id);
+      if (!row) return sendJson(res, 404, { error: 'not found' });
+      return await sendArticleDownload(res, row);
+    } catch (err) {
+      console.error('article download failed', err);
+      return sendJson(res, 500, { error: 'download failed' });
     }
   }
 
@@ -308,18 +429,21 @@ const server = createServer(async (req, res) => {
     try {
       const row = articleByIdStmt.get(id);
       if (!row) return sendJson(res, 404, { error: 'not found' });
-      let blocks = [];
-      try { blocks = JSON.parse(row.blocks_json || '[]'); } catch {}
-      return sendJson(res, 200, {
-        id: row.id,
-        module: row.module,
-        category: row.category,
-        title: row.title,
-        source: row.source,
-        ord: row.ord,
-        rawLen: row.raw_len,
-        createdAt: row.created_at,
-        blocks,
+      const cacheKey = `articles:detail:${id}`;
+      return cachedJson(res, cacheKey, () => {
+        let blocks = [];
+        try { blocks = JSON.parse(row.blocks_json || '[]'); } catch {}
+        return normalizeArticle({
+          id: row.id,
+          module: row.module,
+          category: row.category,
+          title: row.title,
+          source: row.source,
+          ord: row.ord,
+          rawLen: row.raw_len,
+          createdAt: row.created_at,
+          blocks,
+        });
       });
     } catch (err) {
       console.error('article get failed', err);
@@ -345,6 +469,7 @@ const server = createServer(async (req, res) => {
       const row = articleByIdStmt.get(id);
       if (!row) return sendJson(res, 404, { error: 'not found' });
       articleUpdateStmt.run(title, category || row.category, JSON.stringify(blocks), rawLen, id);
+      clearArticleCache();
       return sendJson(res, 200, { id, ok: true });
     } catch (err) {
       console.error('article update failed', err);
@@ -358,6 +483,7 @@ const server = createServer(async (req, res) => {
     if (!Number.isInteger(id) || id <= 0) return sendJson(res, 400, { error: 'invalid id' });
     try {
       articleDeleteStmt.run(id);
+      clearArticleCache();
       return sendJson(res, 200, { id, ok: true });
     } catch (err) {
       console.error('article delete failed', err);
@@ -381,6 +507,7 @@ const server = createServer(async (req, res) => {
     const rawLen = Number(body.rawLen) || blocks.reduce((n, b) => n + (b.text ? b.text.length : (b.items ? b.items.reduce((m, it) => m + (it.text || '').length, 0) : 0)), 0);
     try {
       const info = articleCreateStmt.run(module, category, title, source, ord, JSON.stringify(blocks), rawLen);
+      clearArticleCache();
       return sendJson(res, 200, { id: Number(info.lastInsertRowid), ok: true });
     } catch (err) {
       console.error('article create failed', err);

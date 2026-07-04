@@ -16,7 +16,8 @@ const CATEGORY_FALLBACK = {
 };
 
 let state = { module: '', category: '' };
-let cache = null; // { items, categories }
+let cache = null; // last module cache
+const listCache = new Map(); // module/category → { items, categories }
 
 export async function initArticleListView(module) {
   state = { module, category: '' };
@@ -61,10 +62,15 @@ async function loadAndRender() {
   `;
 
   try {
-    const url = `/api/articles?module=${encodeURIComponent(state.module)}${state.category ? `&category=${encodeURIComponent(state.category)}` : ''}`;
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
+    const cacheKey = `${state.module}::${state.category}`;
+    let data = listCache.get(cacheKey);
+    if (!data) {
+      const url = `/api/articles?module=${encodeURIComponent(state.module)}${state.category ? `&category=${encodeURIComponent(state.category)}` : ''}`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      data = await r.json();
+      listCache.set(cacheKey, data);
+    }
     cache = { module: state.module, ...data };
 
     const countEl = document.getElementById('article-count');
@@ -119,6 +125,7 @@ function renderList(items, module) {
     </div>`;
     return;
   }
+  wrap.dataset.module = module;
   wrap.innerHTML = items.map(a => renderCard(a, module)).join('');
   wrap.querySelectorAll('[data-article-id]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -145,25 +152,29 @@ function renderCard(a, module) {
   const reading = readingTimeLabel(a.raw_len || 0);
   const fallbackCat = CATEGORY_FALLBACK[module] || '文章';
   const category = a.category || fallbackCat;
+  const source = a.source || '';
   return `
-    <button type="button" class="article-card" data-article-id="${a.id}">
+    <article class="article-card">
       <div class="article-card-bar" aria-hidden="true"></div>
-      <div class="article-card-body">
-        <div class="article-card-tags">
-          <span class="article-card-cat">${escapeHtml(category)}</span>
+      <button type="button" class="article-card-main" data-article-id="${a.id}" aria-label="阅读全文：${escapeHtml(a.title)}">
+        <div class="article-card-body">
+          <div class="article-card-tags">
+            <span class="article-card-cat">${escapeHtml(category)}</span>
+            ${source ? `<span class="article-card-source" title="${escapeHtml(source)}">${escapeHtml(source)}</span>` : ''}
+          </div>
+          <h3 class="article-card-title">${escapeHtml(a.title)}</h3>
+          <div class="article-card-meta">
+            <span class="article-card-meta-item">${icon('doc', 13)}<span>${chars}</span></span>
+            <span class="dot"></span>
+            <span class="article-card-meta-item">${icon('clock', 13)}<span>约 ${reading}</span></span>
+          </div>
+          <div class="article-card-foot">
+            <span class="article-card-read">阅读全文</span>
+            <span class="article-card-arrow" aria-hidden="true">${icon('chevronRight', 14)}</span>
+          </div>
         </div>
-        <h3 class="article-card-title">${escapeHtml(a.title)}</h3>
-        <div class="article-card-meta">
-          <span class="article-card-meta-item">${icon('doc', 13)}<span>${chars}</span></span>
-          <span class="dot"></span>
-          <span class="article-card-meta-item">${icon('clock', 13)}<span>约 ${reading}</span></span>
-        </div>
-        <div class="article-card-foot">
-          <span class="article-card-read">阅读全文</span>
-          <span class="article-card-arrow" aria-hidden="true">${icon('chevronRight', 14)}</span>
-        </div>
-      </div>
-    </button>
+      </button>
+    </article>
   `;
 }
 

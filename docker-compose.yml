@@ -4,7 +4,7 @@ services:
     image: lcode-select-school:latest
     container_name: lcode-select-school
     ports:
-      - "8080:80"
+      - "10003:80"
     volumes:
       - ./data:/data
     environment:

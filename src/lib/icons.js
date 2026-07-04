@@ -46,6 +46,7 @@ export const icons = {
   swap: wrap('<path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/>'),
   zap: wrap('<path d="M13 2 4 14h7l-2 8 9-12h-7l2-8Z"/>'),
   doc: wrap('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>'),
+  download: wrap('<path d="M12 3v11"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/><path d="M5 17v4M19 17v4"/>'),
   calendar: wrap('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/>'),
   list: wrap('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
 };

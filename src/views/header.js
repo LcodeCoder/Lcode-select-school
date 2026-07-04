@@ -5,6 +5,9 @@ import { toast } from '../lib/ui.js';
 
 const TABS = [
   { key: 'list', label: '查学校', href: '#/' },
+  { key: 'search', label: '搜资料', href: '#/search' },
+  { key: 'majors', label: '查专业', href: '#/majors' },
+  { key: 'compareLab', label: '学校对比', href: '#/compare-lab' },
   { key: 'guide', label: '新生指南', href: '#/guide' },
   { key: 'exam', label: '志愿填报', href: '#/exam' },
   { key: 'growth', label: '自我提升', href: '#/growth' },
@@ -12,7 +15,10 @@ const TABS = [
 
 function activeTabKey(route) {
   if (route.name === 'articles') return route.params.module;
-  if (route.name === 'article') return null;
+  if (route.name === 'search') return 'search';
+  if (route.name === 'majors') return 'majors';
+  if (route.name === 'compare' || route.name === 'compareLab') return 'compareLab';
+  if (route.name === 'article' || route.name === 'practice') return null;
   return 'list';
 }
 
@@ -98,6 +104,7 @@ export function bindHeader() {
       const tab = TABS.find(t => t.key === key);
       if (!tab) return;
       if (key === 'list') navigate('/');
+      else if (key === 'compareLab') navigate('/compare-lab');
       else navigate('/' + key);
     });
   });

@@ -4,10 +4,14 @@ import './styles/app.css';
 import { renderHeader, bindHeader, refreshTabs } from './views/header.js';
 import { loadSchools, getSchoolById, getFacets } from './lib/data.js';
 import { initView as initList } from './views/list-view.js';
-import { renderDetailView, bindDetailView, renderCompareView, bindCompareView } from './views/detail-view.js';
+import { renderDetailView, bindDetailView } from './views/detail-view.js';
 import { initArticleListView } from './views/article-list-view.js';
 import { initArticleDetailView } from './views/article-detail-view.js';
 import { initAdminView } from './views/admin-view.js';
+import { initSearchView } from './views/search-view.js';
+import { initPracticeView } from './views/practice-view.js';
+import { initMajorsView } from './views/majors-view.js';
+import { initCompareLabView, renderCompareMultiView, bindCompareMultiView } from './views/compare-view.js';
 import { isAdmin, setAdmin, applyTheme, getAllViews, incrementView } from './lib/store.js';
 import { navigate, subscribe, getRoute } from './lib/router.js';
 import { toast } from './lib/ui.js';
@@ -106,23 +110,61 @@ async function renderRoute(route) {
     renderLoading();
     try {
       await loadSchools();
-      const a = getSchoolById(route.params.a);
-      const b = getSchoolById(route.params.b);
-      if (!a || !b) {
+      const ids = route.params.ids || [route.params.a, route.params.b];
+      const schools = ids.map(id => getSchoolById(id)).filter(Boolean);
+      if (schools.length < 2) {
         host.innerHTML = `
           <main class="app-main">
             <div class="empty-state" style="padding: 80px 16px;">
               <div class="empty-state-title">找不到要对比的学校</div>
-              <div class="empty-state-text">至少有一所学校不在数据集里。</div>
-              <button type="button" class="btn btn-primary" onclick="location.hash = '#/'">返回列表</button>
+              <div class="empty-state-text">至少需要选择两所学校。</div>
+              <button type="button" class="btn btn-primary" onclick="location.hash = '#/compare-lab'">重新选择</button>
             </div>
           </main>
         `;
         return;
       }
-      host.innerHTML = renderCompareView(a, b);
-      bindCompareView(a, b);
+      host.innerHTML = renderCompareMultiView(schools.slice(0, 4));
+      bindCompareMultiView(schools.slice(0, 4));
       window.scrollTo({ top: 0, behavior: 'instant' });
+    } catch (err) {
+      renderError(err.message || '未知错误');
+    }
+    return;
+  }
+  if (route.name === 'compareLab') {
+    renderLoading();
+    try {
+      await loadSchools();
+      initCompareLabView();
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    } catch (err) {
+      renderError(err.message || '未知错误');
+    }
+    return;
+  }
+  if (route.name === 'search') {
+    renderLoading();
+    try {
+      await initSearchView(route.params.q || '');
+    } catch (err) {
+      renderError(err.message || '未知错误');
+    }
+    return;
+  }
+  if (route.name === 'majors') {
+    renderLoading();
+    try {
+      await initMajorsView(route.params.q || '');
+    } catch (err) {
+      renderError(err.message || '未知错误');
+    }
+    return;
+  }
+  if (route.name === 'practice') {
+    renderLoading();
+    try {
+      await initPracticeView(route.params.id);
     } catch (err) {
       renderError(err.message || '未知错误');
     }

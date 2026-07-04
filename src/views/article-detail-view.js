@@ -1,11 +1,12 @@
 import { icon } from '../lib/icons.js';
 import { escapeHtml } from '../lib/format.js';
+import { normalizeArticle, isPutonghuaTitle, pinyinPattern } from '../lib/article-normalizer.js';
 import { navigate } from '../lib/router.js';
-import { toast } from '../lib/ui.js';
 
 const MODULE_LABEL = { guide: '新生指南', exam: '志愿填报', growth: '自我提升' };
 const READING_SPEED = 500; // chars per minute (Chinese)
-const TRUNCATE_THRESHOLD = 30000; //Articles >30k chars get truncated with a "show all" toggle
+const TRUNCATE_THRESHOLD = 30000; // Articles >30k chars get truncated with a "show all" toggle
+const articleCache = new Map();
 
 function formatArticleDate(s) {
   if (!s) return '';
@@ -29,7 +30,7 @@ function charsLabel(rawLen) {
 }
 
 // Apply {type, start, end} marks to plain text by slicing and wrapping ranges.
-function renderInline(text, marks) {
+function renderInline(text, marks, context = {}) {
   if (!text) return '';
   const sorted = (marks || []).slice().sort((a, b) => a.start - b.start);
   let out = '';
@@ -42,28 +43,49 @@ function renderInline(text, marks) {
     cursor = m.end;
   }
   out += escapeHtml(text.slice(cursor));
-  return out;
+  return context.pinyin ? renderRubyText(out) : out;
 }
 
-function blockToHtml(b, anchorPrefix) {
+function renderRubyText(escapedText) {
+  const pinyin = pinyinPattern();
+  const han = '[\\u4e00-\\u9fff]{1,8}';
+  const wordPair = new RegExp(`(${han})\\((${pinyin}(?:\\s*[,，、]\\s*${pinyin})*)\\)`, 'g');
+  return escapedText.replace(wordPair, (_m, word, py) => {
+    return `<ruby class="py-ruby"><rb>${word}</rb><rt>${py.replace(/[,，、]/g, ' ')}</rt></ruby>`;
+  });
+}
+
+function renderExamInline(text) {
+  const escaped = escapeHtml(text || '');
+  return escaped
+    .replace(/\s+(A|B|C|D)[．\.:：、)]\s*/g, '<br><span class="exam-option-label">$1.</span> ')
+    .replace(/\s+(答案[:：]?\s*[^\s<]{1,24})/g, '<br><span class="exam-answer">$1</span>')
+    .replace(/\s+(第\d+题)/g, '<br><strong>$1</strong>')
+    .replace(/^<br>/, '');
+}
+
+function blockToHtml(b, anchorPrefix, article = {}) {
+  const pinyin = isPutonghuaTitle(article.title);
   switch (b.type) {
     case 'h1':
-      return `<h2 class="article-h article-h1" id="${anchorPrefix}-${b.idx}">${renderInline(b.text, b.marks)}</h2>`;
+      return `<h2 class="article-h article-h1" id="${anchorPrefix}-${b.idx}">${renderInline(b.text, b.marks, { pinyin })}</h2>`;
     case 'h2':
-      return `<h2 class="article-h article-h2" id="${anchorPrefix}-${b.idx}">${renderInline(b.text, b.marks)}</h2>`;
+      return `<h2 class="article-h article-h2" id="${anchorPrefix}-${b.idx}">${renderInline(b.text, b.marks, { pinyin })}</h2>`;
     case 'h3':
-      return `<h3 class="article-h article-h3" id="${anchorPrefix}-${b.idx}">${renderInline(b.text, b.marks)}</h3>`;
+      return `<h3 class="article-h article-h3" id="${anchorPrefix}-${b.idx}">${renderInline(b.text, b.marks, { pinyin })}</h3>`;
     case 'quote':
-      return `<blockquote class="article-quote">${renderInline(b.text, b.marks)}</blockquote>`;
+      return `<blockquote class="article-quote">${renderInline(b.text, b.marks, { pinyin })}</blockquote>`;
     case 'hr':
       return `<hr class="article-hr" />`;
     case 'ul':
-      return `<ul class="article-ul">${(b.items || []).map(it => `<li>${renderInline(it.text, it.marks)}</li>`).join('')}</ul>`;
+      return `<ul class="article-ul">${(b.items || []).map(it => `<li>${renderInline(it.text, it.marks, { pinyin })}</li>`).join('')}</ul>`;
     case 'ol':
-      return `<ol class="article-ol">${(b.items || []).map(it => `<li>${renderInline(it.text, it.marks)}</li>`).join('')}</ol>`;
+      return `<ol class="article-ol">${(b.items || []).map(it => `<li>${renderInline(it.text, it.marks, { pinyin })}</li>`).join('')}</ol>`;
     case 'p':
     default:
-      return `<p class="article-p">${renderInline(b.text, b.marks)}</p>`;
+      if (b.variant === 'exam') return `<p class="article-p article-preline article-exam-p">${renderExamInline(b.text)}</p>`;
+      if (b.variant === 'pinyin') return `<p class="article-p article-pinyin-p">${renderInline(b.text, b.marks, { pinyin: true })}</p>`;
+      return `<p class="article-p">${renderInline(b.text, b.marks, { pinyin })}</p>`;
   }
 }
 
@@ -92,15 +114,19 @@ export async function initArticleDetailView(id) {
 
   let article = null;
   try {
-    const r = await fetch(`/api/articles/${encodeURIComponent(id)}`);
-    if (!r.ok) {
-      if (r.status === 404) {
-        host.innerHTML = renderNotFound();
-        return;
+    article = articleCache.get(String(id));
+    if (!article) {
+      const r = await fetch(`/api/articles/${encodeURIComponent(id)}`);
+      if (!r.ok) {
+        if (r.status === 404) {
+          host.innerHTML = renderNotFound();
+          return;
+        }
+        throw new Error(`HTTP ${r.status}`);
       }
-      throw new Error(`HTTP ${r.status}`);
+      article = normalizeArticle(await r.json());
+      articleCache.set(String(id), article);
     }
-    article = await r.json();
   } catch (err) {
     host.innerHTML = renderError(err.message || '未知错误');
     return;
@@ -117,12 +143,21 @@ export async function initArticleDetailView(id) {
   const visibleBlocks = isHuge ? allBlocks.slice(0, 120) : allBlocks;
   const blocksHtml = visibleBlocks.length === 0
     ? `<p class="article-p text-muted">这篇文章暂无正文内容。</p>`
-    : visibleBlocks.map(b => blockToHtml(b, anchorPrefix)).join('\n');
+    : visibleBlocks.map(b => blockToHtml(b, anchorPrefix, article)).join('\n');
+  const practiceCta = /题库|考试题/.test(article.title || '') ? `
+    <div class="article-tool-cta">
+      <div>
+        <strong>这篇适合刷题模式</strong>
+        <p>题目和选项已单独拆分，答案可隐藏/显示，练习进度保存在本机浏览器。</p>
+      </div>
+      <button type="button" class="btn btn-primary" id="open-practice">${icon('book', 15)}<span>进入刷题模式</span></button>
+    </div>
+  ` : '';
   const expandNotice = isHuge ? `
     <div class="article-truncate-notice" id="truncate-notice">
       <div class="article-truncate-inner">
         <div class="article-truncate-text">
-          <strong>已显示前 ${visibleBlocks.length} 段</strong>（共 ${allBlocks.length} 段，${chars}）。该文档体量巨大，下方为目录与首屏内容。
+          <strong>已显示前 ${visibleBlocks.length} 段</strong>（共 ${allBlocks.length} 段，${chars}）。该文档体量巨大，先保留首屏阅读速度。
         </div>
         <button type="button" class="btn btn-primary btn-sm" id="expand-article">${icon('chevronDown', 14)}<span>展开全部</span></button>
       </div>
@@ -157,6 +192,8 @@ export async function initArticleDetailView(id) {
 
         ${tocHtml}
 
+        ${practiceCta}
+
         <div class="article-body" id="article-body">
           ${blocksHtml}
         </div>
@@ -172,6 +209,8 @@ export async function initArticleDetailView(id) {
     </main>
   `;
 
+  host.querySelector('#open-practice')?.addEventListener('click', () => navigate(`/practice/${article.id}`));
+
   // "展开全部" — render remaining blocks into the body
   if (isHuge) {
     host.querySelector('#expand-article')?.addEventListener('click', () => {
@@ -179,7 +218,7 @@ export async function initArticleDetailView(id) {
       const notice = host.querySelector('#truncate-notice');
       if (body) {
         const rest = allBlocks.slice(visibleBlocks.length);
-        body.insertAdjacentHTML('beforeend', rest.map(b => blockToHtml(b, anchorPrefix)).join('\n'));
+        body.insertAdjacentHTML('beforeend', rest.map(b => blockToHtml(b, anchorPrefix, article)).join('\n'));
       }
       notice?.remove();
     });
@@ -201,15 +240,13 @@ export async function initArticleDetailView(id) {
         const headerOffset = 64;
         const top = target.getBoundingClientRect().top + window.scrollY - headerOffset;
         window.scrollTo({ top, behavior: 'smooth' });
-        // Update focus without jumping
         history.replaceState(null, '', `#${anchorPrefix}-${a.dataset.tocIdx}`);
       }
     });
   });
 
   // Reading progress bar
-  const progress = host.querySelector('#reading-progress');
-  const progressBar = progress?.querySelector('.reading-progress-bar');
+  const progressBar = host.querySelector('#reading-progress .reading-progress-bar');
   if (progressBar) {
     const onScroll = () => {
       const doc = document.documentElement;
@@ -261,6 +298,7 @@ function renderError(message) {
   return `
     <main class="app-main">
       <div class="empty-state" style="padding: 80px 16px;">
+        <div class="empty-state-emoji" aria-hidden="true">⚠️</div>
         <div class="empty-state-title">加载失败</div>
         <div class="empty-state-text">${escapeHtml(message)}</div>
         <button type="button" class="btn btn-primary" onclick="location.reload()">重新加载</button>
